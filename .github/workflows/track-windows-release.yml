@@ -1,0 +1,73 @@
+name: Track Windows 11 releases
+
+# Best-effort watcher: weekly, it reads Microsoft's Windows 11 release-information
+# page, finds the newest GA "OS build", and — when a NEW base build (i.e. a new
+# version) appears — updates data/latest-windows.json and opens an issue asking a
+# maintainer to verify Wingman against the new media with `make check-iso`.
+# It does NOT download or host any ISO (that would violate Microsoft's license).
+# If the page format changes and parsing fails, the run fails loudly so the
+# scraper breakage is noticed rather than silently passing.
+
+on:
+  schedule:
+    - cron: "17 7 * * 1"   # Mondays 07:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Detect latest Windows 11 GA build
+        id: d
+        run: |
+          set -euo pipefail
+          URL="https://learn.microsoft.com/en-us/windows/release-health/windows11-release-information"
+          html="$(curl -fsSL -A 'Mozilla/5.0 (Wingman release tracker)' "$URL")"
+          base="$(printf '%s' "$html" | grep -oE 'OS build [0-9]{5,}' | grep -oE '[0-9]{5,}$' | sort -n | tail -1)"
+          if [ -z "$base" ]; then
+            echo "::error::Could not parse an OS build from the release page — its format may have changed."
+            exit 1
+          fi
+          ver="$(printf '%s' "$html" | grep -oE "Version [0-9]{2}H[12] \(OS build ${base}\)" | grep -oE '[0-9]{2}H[12]' | head -1)"
+          rev="$(printf '%s' "$html" | grep -oE "${base}\.[0-9]+" | sort -t. -k2,2n | tail -1)"
+          prev="$(jq -r '.build // ""' data/latest-windows.json 2>/dev/null || echo "")"
+          {
+            echo "base=$base"
+            echo "ver=${ver:-unknown}"
+            echo "rev=${rev:-$base}"
+            echo "prev=$prev"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Update manifest and open an issue on a new version
+        if: steps.d.outputs.base != steps.d.outputs.prev
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          base='${{ steps.d.outputs.base }}'; ver='${{ steps.d.outputs.ver }}'
+          rev='${{ steps.d.outputs.rev }}'; prev='${{ steps.d.outputs.prev }}'
+          src="https://learn.microsoft.com/en-us/windows/release-health/windows11-release-information"
+          mkdir -p data
+          printf '{\n  "version": "%s",\n  "build": "%s",\n  "revision": "%s",\n  "checked": "%s",\n  "source": "%s"\n}\n' \
+            "$ver" "$base" "$rev" "$(date -u +%F)" "$src" > data/latest-windows.json
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/latest-windows.json
+          git commit -m "Track Windows 11 $ver (OS build $base)" || exit 0
+          git push
+          gh issue create \
+            --title "New Windows 11 version: $ver (OS build $base)" \
+            --body "Microsoft now lists **$ver** (OS build \`$base\`, latest revision \`$rev\`) as a generally-available Windows 11 release — newer than build \`$prev\`.
+
+          Please verify Wingman still works with the new media:
+          1. Download the latest Windows 11 ISO: https://www.microsoft.com/software-download/windows11
+          2. Run \`make check-iso ISO=/path/to/Win11.iso\` — it must report **Compatible**.
+          3. If it isn't, WimKit needs updating (most likely the image now uses solid resources or a compressed blob table).
+
+          _Filed automatically by .github/workflows/track-windows-release.yml._"

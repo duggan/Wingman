@@ -1,0 +1,22 @@
+# Swift / SwiftPM
+.build/
+.swiftpm/
+Package.resolved
+
+# Build output
+build/
+*.app
+*.dmg
+
+# Notarization credentials — never commit
+.env
+*.p8
+
+# Large media (Windows ISOs live outside the repo)
+*.iso
+
+# Node (tools/)
+node_modules/
+
+# macOS
+.DS_Store

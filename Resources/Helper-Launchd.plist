@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>ie.duggan.Wingman.Helper</string>
+    <!-- Path to the daemon executable, relative to the app bundle root. -->
+    <key>BundleProgram</key>
+    <string>Contents/MacOS/WingmanHelper</string>
+    <key>MachServices</key>
+    <dict>
+        <key>ie.duggan.Wingman.Helper</key>
+        <true/>
+    </dict>
+    <!-- Ties this daemon's lifecycle to the app that manages it. -->
+    <key>AssociatedBundleIdentifiers</key>
+    <array>
+        <string>ie.duggan.Wingman</string>
+    </array>
+</dict>
+</plist>

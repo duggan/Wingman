@@ -1,0 +1,8 @@
+{
+  "version": "25H2",
+  "build": "26200",
+  "revision": "26200.8655",
+  "checked": "2026-06-18",
+  "source": "https://learn.microsoft.com/en-us/windows/release-health/windows11-release-information",
+  "note": "Last Windows 11 build Wingman was validated against. The tracker flags newer GA base builds and asks for a `make check-iso` re-test."
+}

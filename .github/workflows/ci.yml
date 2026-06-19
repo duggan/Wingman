@@ -1,0 +1,15 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build
+        run: swift build
+      - name: Test (WimKit, against the committed fixture — no ISO needed)
+        run: swift test
