@@ -19,6 +19,7 @@ struct ContentView: View {
     @State private var detected: WindowsImage?
     @State private var detecting = false
     @State private var bypassChecks = false
+    @State private var allowLocalAccount = false
 
     private var selectedDisk: USBDisk? { scanner.disks.first { $0.id == selection } }
     private var isRunning: Bool { client.isBusy || writer.isCopying }
@@ -138,7 +139,10 @@ struct ContentView: View {
                 Button("Windows 10…") { open("https://www.microsoft.com/software-download/windows10") }
                     .buttonStyle(.link).font(.caption)
             }
-            if showsBypass { bypassToggle }
+            if showsBypass {
+                bypassToggle
+                localAccountToggle
+            }
         }
     }
 
@@ -166,6 +170,19 @@ struct ContentView: View {
         .toggleStyle(.checkbox)
         .disabled(isRunning)
         .padding(.top, 4)
+    }
+
+    private var localAccountToggle: some View {
+        Toggle(isOn: $allowLocalAccount) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Allow a local account (skip the Microsoft sign-in)")
+                Text("Re-enables the “I don’t have internet” / local-account path in Windows Setup. You still create the account during install — nothing is stored on the USB. May stop working on a future Windows build.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .toggleStyle(.checkbox)
+        .disabled(isRunning)
+        .padding(.top, 2)
     }
 
     private var usbStep: some View {
@@ -247,8 +264,9 @@ struct ContentView: View {
     private func startCreate() {
         guard let iso = isoURL, let disk = pendingDisk else { return }
         let bypass = showsBypass && bypassChecks
+        let localAccount = showsBypass && allowLocalAccount
         client.formatDisk(disk) { ok in
-            if ok { writer.copy(isoURL: iso, toDiskBSD: disk.bsdName, bypassWin11Checks: bypass) }
+            if ok { writer.copy(isoURL: iso, toDiskBSD: disk.bsdName, bypassWin11Checks: bypass, allowLocalAccount: localAccount) }
         }
     }
 
@@ -258,6 +276,7 @@ struct ContentView: View {
     private func detectWindows() {
         detected = nil
         bypassChecks = false
+        allowLocalAccount = false
         guard let iso = isoURL else { return }
         detecting = true
         DispatchQueue.global(qos: .userInitiated).async {

@@ -39,14 +39,14 @@ final class MediaWriter: ObservableObject {
     /// `bypassWin11Checks` requests the Windows 11 hardware-requirement bypass
     /// (TPM / Secure Boot / RAM, …). It is honored only when the ISO is NOT a
     /// confirmed Windows 10 image — re-validated here, never trusting the caller.
-    func copy(isoURL: URL, toDiskBSD diskBSD: String, bypassWin11Checks: Bool = false) {
+    func copy(isoURL: URL, toDiskBSD diskBSD: String, bypassWin11Checks: Bool = false, allowLocalAccount: Bool = false) {
         guard !isCopying else { return }
         cancelled = false
         publish { $0.isCopying = true; $0.progress = 0; $0.currentItem = ""; $0.status = "Locating target volume…" }
-        queue.async { [weak self] in self?.runCopy(isoURL: isoURL, diskBSD: diskBSD, bypassWin11Checks: bypassWin11Checks) }
+        queue.async { [weak self] in self?.runCopy(isoURL: isoURL, diskBSD: diskBSD, bypassWin11Checks: bypassWin11Checks, allowLocalAccount: allowLocalAccount) }
     }
 
-    private func runCopy(isoURL: URL, diskBSD: String, bypassWin11Checks: Bool) {
+    private func runCopy(isoURL: URL, diskBSD: String, bypassWin11Checks: Bool, allowLocalAccount: Bool) {
         // Resolve the destination from the DEVICE, never a hardcoded label: with
         // a case-insensitive /Volumes and any pre-existing "Windows" volume, the
         // new stick can mount as "/Volumes/WINDOWS 1" while a label check passes
@@ -121,15 +121,18 @@ final class MediaWriter: ObservableObject {
         }
         if cancelled { return finish(false, "Cancelled.") }
 
-        // Optional — drop the Windows 11 hardware-check bypass onto the stick.
+        // Optional Setup tweaks, written into one autounattend.xml on the stick.
         // Applied only when requested AND the media isn't confirmed Windows 10
-        // (the keys are inert on 10, and blanking its appraiser is pointless).
-        // BEST-EFFORT: a bypass write failure must not sink an otherwise-good USB
-        // or skip the essential install.wim split below — it's just a convenience.
-        let bypassWanted = bypassWin11Checks && windows?.product != .windows10
-        var bypassApplied = false
-        if bypassWanted {
-            do { try writeWin11Bypass(at: destination); bypassApplied = true }
+        // (these levers are Windows-11 concerns; inert/pointless on 10).
+        // BEST-EFFORT: a write failure must not sink an otherwise-good USB or skip
+        // the essential install.wim split below — they're conveniences.
+        let win11 = windows?.product != .windows10
+        let hardwareBypass = bypassWin11Checks && win11
+        let localAccount = allowLocalAccount && win11
+        let wantUnattend = hardwareBypass || localAccount
+        var unattendWritten = false
+        if wantUnattend {
+            do { try writeUnattend(at: destination, hardwareBypass: hardwareBypass, allowLocalAccount: localAccount); unattendWritten = true }
             catch { /* keep going; surfaced in the final message */ }
         }
 
@@ -162,11 +165,12 @@ final class MediaWriter: ObservableObject {
         let ejected = run(Self.diskutil, ["eject", diskBSD]).status == 0
         let tail = ejected ? "You can unplug it now." : "Eject it in Finder before unplugging."
         let product = windows?.product.rawValue ?? "Windows"
-        let bypassNote: String
-        if bypassApplied { bypassNote = " Hardware checks (TPM, Secure Boot, RAM) are bypassed." }
-        else if bypassWanted { bypassNote = " (The hardware-check bypass couldn’t be written.)" }
-        else { bypassNote = "" }
-        finish(true, "“\(label)” is ready — \(product) USB created.\(bypassNote) \(tail)")
+        var notes: [String] = []
+        if unattendWritten && hardwareBypass { notes.append("hardware checks (TPM, Secure Boot, RAM) bypassed") }
+        if unattendWritten && localAccount   { notes.append("local-account option enabled") }
+        let appliedNote = notes.isEmpty ? "" : " — \(notes.joined(separator: ", "))."
+        let failNote = (wantUnattend && !unattendWritten) ? " (Setup tweaks couldn’t be written.)" : ""
+        finish(true, "“\(label)” is ready — \(product) USB created.\(appliedNote)\(failNote) \(tail)")
     }
 
     // MARK: - Windows 11 hardware-check bypass (app-side file drop)
@@ -185,43 +189,56 @@ final class MediaWriter: ObservableObject {
         return nil
     }
 
-    /// Two pure file drops onto the FAT32 root that, together, reliably skip the
-    /// Windows 11 hardware appraisal across 23H2/24H2/25H2 (the approach Rufus
-    /// uses), while leaving the install itself fully interactive:
-    ///  1. `autounattend.xml` — seeds the `HKLM\SYSTEM\Setup\LabConfig` bypass
-    ///     keys during the windowsPE pass, before the "This PC can't run Windows
-    ///     11" gate. It automates nothing else (no disk/partition/account), so
-    ///     there is no risk of an unattended wipe.
-    ///  2. A 0-byte `sources/appraiserres.dll` — makes the appraiser fail to load,
-    ///     so checks are skipped even if the new setup engine ignores the answer
-    ///     file. This belt-and-suspenders pairing is the robust part.
-    private func writeWin11Bypass(at destination: URL) throws {
-        let xml = destination.appendingPathComponent("autounattend.xml")
-        try Self.autounattendXML.write(to: xml, atomically: true, encoding: .utf8)
+    /// Write the chosen opt-ins to the FAT32 root. Everything is a plain file
+    /// drop — no WIM edit, no automated install, and NO account or password is
+    /// ever stored on the stick:
+    ///  • `autounattend.xml` — composed from the selected passes (`autounattend`).
+    ///  • (hardware bypass only) a 0-byte `sources/appraiserres.dll`, so the
+    ///    appraiser fails to load and the checks are skipped even if the newer
+    ///    setup engine ignores the answer file.
+    private func writeUnattend(at destination: URL, hardwareBypass: Bool, allowLocalAccount: Bool) throws {
+        let xml = Self.autounattend(hardwareBypass: hardwareBypass, allowLocalAccount: allowLocalAccount)
+        try xml.write(to: destination.appendingPathComponent("autounattend.xml"), atomically: true, encoding: .utf8)
 
-        let appraiser = destination.appendingPathComponent("sources/appraiserres.dll")
-        let fm = FileManager.default
-        if fm.fileExists(atPath: appraiser.path) { try fm.removeItem(at: appraiser) }
-        guard fm.createFile(atPath: appraiser.path, contents: Data()) else {
-            throw NSError(domain: "Wingman", code: 1,
-                          userInfo: [NSLocalizedDescriptionKey: "could not blank sources/appraiserres.dll"])
+        if hardwareBypass {
+            let appraiser = destination.appendingPathComponent("sources/appraiserres.dll")
+            let fm = FileManager.default
+            if fm.fileExists(atPath: appraiser.path) { try fm.removeItem(at: appraiser) }
+            guard fm.createFile(atPath: appraiser.path, contents: Data()) else {
+                throw NSError(domain: "Wingman", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: "could not blank sources/appraiserres.dll"])
+            }
         }
     }
 
-    /// windowsPE-pass `LabConfig` bypass for amd64 + arm64 media. Hardware checks
-    /// only — deliberately no `ImageInstall`/`DiskConfiguration`/`oobeSystem`, so
-    /// setup stays interactive.
-    private static let autounattendXML = """
+    /// Compose `autounattend.xml` from the chosen opt-ins. Every `<component>` is
+    /// emitted for amd64 + arm64 so one file serves x64 and ARM64 media (Setup
+    /// applies the block matching the booting architecture). Entries are only
+    /// reg-adds / screen-suppression — nothing automates the install or stores
+    /// credentials, so Setup stays interactive.
+    static func autounattend(hardwareBypass: Bool, allowLocalAccount: Bool) -> String {
+        var body = unattendHead
+        if hardwareBypass    { body += hardwareBypassSettings }
+        if allowLocalAccount { body += localAccountSettings }
+        body += "</unattend>\n"
+        return body
+    }
+
+    private static let unattendHead = """
     <?xml version="1.0" encoding="utf-8"?>
-    <!-- Written by Wingman: bypasses the Windows 11 hardware-requirement checks
-         (TPM 2.0, Secure Boot, RAM, storage, CPU) during Windows Setup. It does
-         NOT automate disk selection, partitioning, editions, or accounts — the
-         install stays fully interactive. Delete this file to install normally. -->
+    <!-- Written by Wingman: opt-in tweaks to Windows Setup. Nothing is automated
+         beyond the entries below, and no account or password is stored on the USB.
+         Delete this file to install with stock Windows defaults. -->
     <unattend xmlns="urn:schemas-microsoft-com:unattend"
               xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+
+    """
+
+    /// windowsPE: `HKLM\\SYSTEM\\Setup\\LabConfig` keys that skip the Windows 11
+    /// TPM / Secure Boot / RAM / storage / CPU appraisal before the gate runs.
+    private static let hardwareBypassSettings = """
       <settings pass="windowsPE">
-        <component name="Microsoft-Windows-Setup" processorArchitecture="amd64"
-                   publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+        <component name="Microsoft-Windows-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
           <RunSynchronous>
             <RunSynchronousCommand wcm:action="add"><Order>1</Order><Path>reg.exe add "HKLM\\SYSTEM\\Setup\\LabConfig" /v BypassTPMCheck /t REG_DWORD /d 1 /f</Path></RunSynchronousCommand>
             <RunSynchronousCommand wcm:action="add"><Order>2</Order><Path>reg.exe add "HKLM\\SYSTEM\\Setup\\LabConfig" /v BypassSecureBootCheck /t REG_DWORD /d 1 /f</Path></RunSynchronousCommand>
@@ -231,8 +248,7 @@ final class MediaWriter: ObservableObject {
             <RunSynchronousCommand wcm:action="add"><Order>6</Order><Path>reg.exe add "HKLM\\SYSTEM\\Setup\\LabConfig" /v BypassDiskCheck /t REG_DWORD /d 1 /f</Path></RunSynchronousCommand>
           </RunSynchronous>
         </component>
-        <component name="Microsoft-Windows-Setup" processorArchitecture="arm64"
-                   publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+        <component name="Microsoft-Windows-Setup" processorArchitecture="arm64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
           <RunSynchronous>
             <RunSynchronousCommand wcm:action="add"><Order>1</Order><Path>reg.exe add "HKLM\\SYSTEM\\Setup\\LabConfig" /v BypassTPMCheck /t REG_DWORD /d 1 /f</Path></RunSynchronousCommand>
             <RunSynchronousCommand wcm:action="add"><Order>2</Order><Path>reg.exe add "HKLM\\SYSTEM\\Setup\\LabConfig" /v BypassSecureBootCheck /t REG_DWORD /d 1 /f</Path></RunSynchronousCommand>
@@ -243,7 +259,41 @@ final class MediaWriter: ObservableObject {
           </RunSynchronous>
         </component>
       </settings>
-    </unattend>
+
+    """
+
+    /// specialize + oobeSystem: re-enable the "I don't have internet" / local-
+    /// account path and suppress the Microsoft-account screens, so the user can
+    /// finish Setup with a LOCAL account. Interactive — neither creates an account
+    /// nor stores a password. Honored on current Windows 11 24H2/25H2; Microsoft
+    /// may remove these levers on a future build (manual fallback: Shift+F10 →
+    /// `start ms-cxh:localonly`).
+    private static let localAccountSettings = """
+      <settings pass="specialize">
+        <component name="Microsoft-Windows-Deployment" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+          <RunSynchronous>
+            <RunSynchronousCommand wcm:action="add"><Order>1</Order><Path>reg.exe add "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\OOBE" /v BypassNRO /t REG_DWORD /d 1 /f</Path></RunSynchronousCommand>
+            <RunSynchronousCommand wcm:action="add"><Order>2</Order><Path>reg.exe add "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\OOBE" /v HideOnlineAccountScreens /t REG_DWORD /d 1 /f</Path></RunSynchronousCommand>
+          </RunSynchronous>
+        </component>
+        <component name="Microsoft-Windows-Deployment" processorArchitecture="arm64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+          <RunSynchronous>
+            <RunSynchronousCommand wcm:action="add"><Order>1</Order><Path>reg.exe add "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\OOBE" /v BypassNRO /t REG_DWORD /d 1 /f</Path></RunSynchronousCommand>
+            <RunSynchronousCommand wcm:action="add"><Order>2</Order><Path>reg.exe add "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\OOBE" /v HideOnlineAccountScreens /t REG_DWORD /d 1 /f</Path></RunSynchronousCommand>
+          </RunSynchronous>
+        </component>
+      </settings>
+      <settings pass="oobeSystem">
+        <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+          <OOBE>
+            <HideOnlineAccountScreens>true</HideOnlineAccountScreens>          </OOBE>
+        </component>
+        <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="arm64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+          <OOBE>
+            <HideOnlineAccountScreens>true</HideOnlineAccountScreens>          </OOBE>
+        </component>
+      </settings>
+
     """
 
     // MARK: - Volume resolution

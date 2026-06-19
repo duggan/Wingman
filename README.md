@@ -61,16 +61,20 @@ UEFI boots it via the ISO's own `efi/boot/bootx64.efi` — no custom bootloader.
 
 Wingman reads the chosen ISO's `install.wim` XML (a few KB) to identify the release — **Windows 10 vs 11, and every edition** — and adapts the UI accordingly. Both are first-class targets.
 
-### Bypassing the Windows 11 hardware checks (optional)
+### Optional Windows 11 Setup tweaks
 
-To install Windows 11 on hardware Microsoft deems "unsupported", an opt-in checkbox writes the same bypass the popular tools use — **as pure file drops, no image rewriting**:
+Two opt-in checkboxes — shown for Windows 11 media, **off by default**, hidden for confirmed Windows 10 — let Wingman drop **pure files** onto the USB: no image rewriting, nothing automated, no credentials stored.
 
-- an **`autounattend.xml`** at the USB root that seeds the `HKLM\SYSTEM\Setup\LabConfig` bypass keys (`BypassTPMCheck`, `BypassSecureBootCheck`, `BypassRAMCheck`, …) during the `windowsPE` pass, before Setup's compatibility gate runs — and **nothing else**, so the install stays fully interactive (no unattended disk wipe);
+**Bypass the hardware requirements**, to install on hardware Microsoft deems "unsupported":
+
+- an **`autounattend.xml`** at the USB root that seeds the `HKLM\SYSTEM\Setup\LabConfig` bypass keys (`BypassTPMCheck`, `BypassSecureBootCheck`, `BypassRAMCheck`, …) during the `windowsPE` pass, before Setup's compatibility gate — and **nothing else**, so the install stays fully interactive (no unattended disk wipe);
 - a blanked **`sources/appraiserres.dll`**, so the appraiser skips the checks even when the newer setup engine ignores the answer file.
 
-The toggle is **off by default** and hidden for media confirmed to be Windows 10. WinDiskWriter achieves a similar result by setting `INSTALLATIONTYPE=Server` in the WIM; Wingman uses file drops instead, which avoids rewriting the image and matches what Rufus does on current builds.
+WinDiskWriter achieves a similar result by setting `INSTALLATIONTYPE=Server` in the WIM; Wingman uses file drops instead, which avoids rewriting the image and matches what Rufus does on current builds.
 
-> Installing Windows 11 on unsupported hardware is a configuration Microsoft does not officially support, and such PCs may not receive updates. Use it on hardware you own.
+**Allow a local account**, to finish Setup without a Microsoft account: the same `autounattend.xml` re-enables the "I don't have internet" / local-account path via `OOBE\BypassNRO` + `HideOnlineAccountScreens` (specialize pass) and an `oobeSystem` screen-suppression block. You still create the account by hand — **no account or password is stored on the USB**.
+
+> Installing Windows 11 on unsupported hardware is a configuration Microsoft doesn't officially support, and such PCs may not receive updates. The local-account levers work on current Windows 11 (24H2/25H2), but Microsoft may remove them on a future build — `Shift+F10 → start ms-cxh:localonly` is the manual fallback. Use these on hardware you own.
 
 ### A codec-free, pure-Swift WIM splitter
 
@@ -97,7 +101,7 @@ The privilege boundary follows **least privilege**: the root daemon does *only* 
 | ISO mount + copy | `hdiutil attach -plist` + streamed copy (app-side, unprivileged) |
 | WIM split | pure-Swift [`WimKit`](Sources/WimKit/) — no codec, no external dependency |
 | Version detection | reads the `install.wim`/`.esd` XML resource (UTF-16LE, uncompressed) for release + editions; build ≥ 22000 ⇒ Windows 11 |
-| Win 11 bypass | opt-in `autounattend.xml` (windowsPE `LabConfig` keys) + blanked `appraiserres.dll`, app-side file drops only |
+| Win 11 Setup tweaks | opt-in `autounattend.xml` — hardware-check bypass (windowsPE `LabConfig` + blanked `appraiserres.dll`) and/or local account (`BypassNRO`/`HideOnlineAccountScreens`); app-side file drops only |
 | Distribution | Developer ID + Hardened Runtime + notarized DMG (no App Store) |
 
 ## Build from source
