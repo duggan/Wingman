@@ -5,7 +5,7 @@
 <h1 align="center">Wingman</h1>
 
 <p align="center">
-  Create a bootable Windows 10 or 11 USB installer on macOS — code-signed, notarized, and self-contained.
+  Create a bootable Windows 10 or 11 USB installer on macOS.
 </p>
 
 <p align="center">
