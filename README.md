@@ -25,7 +25,7 @@ Wingman turns a Microsoft Windows 10 or 11 ISO into a bootable USB installer. It
 
 1. Download `Wingman.dmg` from the [latest release](https://github.com/duggan/Wingman/releases/latest).
 2. Open it and drag **Wingman** to **Applications**.
-3. Launch Wingman. On first run, approve it under **System Settings ▸ General ▸ Login Items & Extensions** so it can format USB drives — macOS requires this, and Wingman detects the approval automatically (no button to click).
+3. Launch Wingman. On first run, approve it under **System Settings ▸ General ▸ Login Items & Extensions** so it can format USB drives — macOS requires this, and Wingman detects the approval automatically.
 
 The app is notarized, so Gatekeeper opens it without a security override.
 
