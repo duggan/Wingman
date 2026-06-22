@@ -17,7 +17,7 @@
   <img src="docs/screenshot.png" alt="Wingman creating a Windows 11 USB installer, with hardware-check bypass enabled" width="460">
 </p>
 
-Wingman turns a Microsoft Windows 10 or 11 ISO into a bootable USB installer. It's a native SwiftUI app, properly **code-signed and notarized**, and the whole pipeline — format → copy → split `install.wim` — runs from a single click.
+Wingman turns a Microsoft Windows 10 or 11 ISO into a bootable USB installer. It's a native SwiftUI app, properly **code-signed and notarized**.
 
 > ⚠️ **Creating an installer erases the entire selected USB drive.** Back up anything on it first. Wingman only lists external, removable drives and refuses your internal/startup disk — but you choose which stick to erase.
 
