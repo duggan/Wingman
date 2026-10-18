@@ -81,7 +81,8 @@ jobs:
           NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
         run: |
           set -euo pipefail
-          TEAM_ID="$(make -s -pn 2>/dev/null | sed -n 's/^TEAM_ID := //p' | head -1)"
+          TEAM_ID="$(sed -n 's/^TEAM_ID *:= *//p' Makefile)"
+          test -n "$TEAM_ID"
           xcrun notarytool store-credentials wingman \
             --apple-id "$NOTARY_APPLE_ID" --team-id "$TEAM_ID" \
             --password "$NOTARY_PASSWORD" --keychain "$KEYCHAIN"
