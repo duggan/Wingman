@@ -1,9 +1,16 @@
 name: Release
 
 # Builds, signs (Developer ID), notarizes and staples Wingman.dmg using
-# `make release`. Run it manually (Actions > Release > Run workflow) to get the
-# DMG as a build artifact, or push a `v*` tag to also attach it to a GitHub
-# release.
+# `make release`. What gets published depends on the trigger:
+#
+#   tag v1.2.3          -> GitHub release (marked latest)
+#   tag v1.2.3-rc1      -> GitHub pre-release (any tag with a "-" suffix)
+#   push to test/**     -> pre-release `test-<branch>-<sha>` for that branch, so
+#                          an issue reporter can download a build of the fix
+#   manual dispatch     -> run it on any branch (pick it in the "Use workflow
+#                          from" dropdown). Always uploads the DMG as a build
+#                          artifact; tick "publish" to also create the
+#                          `test-<branch>-<sha>` pre-release.
 #
 # Required repository secrets (Settings > Secrets and variables > Actions):
 #   DEVELOPER_ID_CERT_P12       base64 of the exported "Developer ID Application"
@@ -17,8 +24,18 @@ name: Release
 
 on:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: "Also publish a test pre-release for this branch"
+        type: boolean
+        default: false
   push:
     tags: ["v*"]
+    branches: ["test/**"]
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -75,14 +92,46 @@ jobs:
           path: build/Wingman.dmg
           if-no-files-found: error
 
-      - name: Attach DMG to the GitHub release
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Work out what to publish
+        id: plan
+        env:
+          PUBLISH_INPUT: ${{ inputs.publish }}
+        run: |
+          set -euo pipefail
+          SHORT="${GITHUB_SHA::7}"
+          SLUG="$(echo "$GITHUB_REF_NAME" | tr -c 'A-Za-z0-9\n' '-' | sed 's/--*/-/g; s/^-//; s/-$//')"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+            if [[ "$GITHUB_REF_NAME" == *-* ]]; then echo "kind=prerelease" >> "$GITHUB_OUTPUT"
+            else echo "kind=release" >> "$GITHUB_OUTPUT"; fi
+          elif [[ "$GITHUB_EVENT_NAME" == push || "$PUBLISH_INPUT" == "true" ]]; then
+            echo "tag=test-$SLUG-$SHORT" >> "$GITHUB_OUTPUT"
+            echo "kind=test" >> "$GITHUB_OUTPUT"
+          else
+            echo "kind=none" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish GitHub release
+        if: steps.plan.outputs.kind != 'none'
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.plan.outputs.tag }}
+          KIND: ${{ steps.plan.outputs.kind }}
         run: |
-          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
-            || gh release create "$GITHUB_REF_NAME" --generate-notes
-          gh release upload "$GITHUB_REF_NAME" build/Wingman.dmg --clobber
+          set -euo pipefail
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            case "$KIND" in
+              release)
+                gh release create "$TAG" --verify-tag --generate-notes ;;
+              prerelease)
+                gh release create "$TAG" --verify-tag --generate-notes --prerelease ;;
+              test)
+                gh release create "$TAG" --target "$GITHUB_SHA" --prerelease \
+                  --title "Test build: $GITHUB_REF_NAME @ ${GITHUB_SHA::7}" \
+                  --notes "Test build of branch \`$GITHUB_REF_NAME\` at $GITHUB_SHA. Not a stable release." ;;
+            esac
+          fi
+          gh release upload "$TAG" build/Wingman.dmg --clobber
 
       - name: Remove temporary keychain
         if: always()
