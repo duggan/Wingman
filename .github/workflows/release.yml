@@ -43,10 +43,13 @@ permissions:
 jobs:
   release:
     runs-on: macos-latest
-    env:
-      KEYCHAIN: ${{ runner.temp }}/wingman-build.keychain-db
     steps:
       - uses: actions/checkout@v5
+
+      # The `runner` context isn't available in job-level `env`, so derive the
+      # keychain path from $RUNNER_TEMP here and export it to later steps.
+      - name: Set keychain path
+        run: echo "KEYCHAIN=$RUNNER_TEMP/wingman-build.keychain-db" >> "$GITHUB_ENV"
 
       - name: Install create-dmg
         run: brew install create-dmg

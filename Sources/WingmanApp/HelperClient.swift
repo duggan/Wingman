@@ -26,13 +26,20 @@ final class HelperClient: ObservableObject {
 
     // MARK: - SMAppService lifecycle
 
+    private static let notFoundMessage = "Wingman couldn’t register its helper. Try moving Wingman to Applications and reopening it."
+
     func refreshStatus() {
-        switch service.status {
-        case .enabled:           set(enabled: true)
-        case .requiresApproval:  set(enabled: false)
-        case .notRegistered:     set(enabled: false)
-        case .notFound:          set("Wingman’s helper is missing from the app bundle.", enabled: false)
-        @unknown default:        set(enabled: false)
+        let current = service.status
+        if current == .notFound {
+            set(Self.notFoundMessage, enabled: false)
+            return
+        }
+        set(enabled: current == .enabled)
+        // Clear a stale .notFound message once registration succeeds (on macOS 13
+        // the pre-registration status is .notFound), but leave any other status
+        // text, e.g. a format error, alone.
+        DispatchQueue.main.async {
+            if self.status == Self.notFoundMessage { self.status = "" }
         }
     }
 
