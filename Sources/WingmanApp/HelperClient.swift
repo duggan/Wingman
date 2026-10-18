@@ -41,8 +41,15 @@ final class HelperClient: ObservableObject {
     /// permitted" on some macOS versions, so we guard on status and never
     /// surface a registration error — the permission banner (driven by
     /// `isEnabled`) is the user-facing source of truth.
+    ///
+    /// `.notFound` is attempted too: on macOS 13 (Ventura) a daemon that has
+    /// never been registered reports `.notFound` rather than `.notRegistered`,
+    /// so gating on `.notRegistered` alone meant it was never registered and
+    /// never appeared in Login Items. If the plist really is missing from the
+    /// bundle, `register()` fails and the status stays `.notFound`.
     func registerIfNeeded() {
-        if service.status == .notRegistered {
+        let current = service.status
+        if current == .notRegistered || current == .notFound {
             do { try service.register() }
             catch { NSLog("Wingman: SMAppService.register() failed: \(error.localizedDescription)") }
         }
