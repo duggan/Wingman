@@ -26,13 +26,20 @@ final class HelperClient: ObservableObject {
 
     // MARK: - SMAppService lifecycle
 
+    private static let notFoundMessage = "Wingman couldn’t register its helper. Try moving Wingman to Applications and reopening it."
+
     func refreshStatus() {
-        switch service.status {
-        case .enabled:           set(enabled: true)
-        case .requiresApproval:  set(enabled: false)
-        case .notRegistered:     set(enabled: false)
-        case .notFound:          set("Wingman’s helper is missing from the app bundle.", enabled: false)
-        @unknown default:        set(enabled: false)
+        let current = service.status
+        if current == .notFound {
+            set(Self.notFoundMessage, enabled: false)
+            return
+        }
+        set(enabled: current == .enabled)
+        // Clear a stale .notFound message once registration succeeds (on macOS 13
+        // the pre-registration status is .notFound), but leave any other status
+        // text, e.g. a format error, alone.
+        DispatchQueue.main.async {
+            if self.status == Self.notFoundMessage { self.status = "" }
         }
     }
 
@@ -41,8 +48,15 @@ final class HelperClient: ObservableObject {
     /// permitted" on some macOS versions, so we guard on status and never
     /// surface a registration error — the permission banner (driven by
     /// `isEnabled`) is the user-facing source of truth.
+    ///
+    /// `.notFound` is attempted too: on macOS 13 (Ventura) a daemon that has
+    /// never been registered reports `.notFound` rather than `.notRegistered`,
+    /// so gating on `.notRegistered` alone meant it was never registered and
+    /// never appeared in Login Items. If the plist really is missing from the
+    /// bundle, `register()` fails and the status stays `.notFound`.
     func registerIfNeeded() {
-        if service.status == .notRegistered {
+        let current = service.status
+        if current == .notRegistered || current == .notFound {
             do { try service.register() }
             catch { NSLog("Wingman: SMAppService.register() failed: \(error.localizedDescription)") }
         }
